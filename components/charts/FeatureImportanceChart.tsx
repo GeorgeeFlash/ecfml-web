@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 import {
   Bar,
@@ -8,26 +8,32 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from 'recharts'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import type { FeatureImportance } from '@/types/model'
+} from "recharts";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import type { FeatureImportance } from "@/types/model";
 
 interface Props {
-  data: FeatureImportance[]
-  title?: string
-  description?: string
+  data: FeatureImportance[];
+  title?: string;
+  description?: string;
 }
 
 export function FeatureImportanceChart({
   data,
-  title = 'Feature Importance',
-  description = 'Top 15 features by importance (Random Forest)',
+  title = "Feature Importance",
+  description = "Top 15 features by importance (Random Forest)",
 }: Props) {
   // Sort descending and take top 15
   const sorted = [...data]
     .sort((a, b) => b.importance - a.importance)
-    .slice(0, 15)
+    .slice(0, 15);
 
   return (
     <Card>
@@ -43,7 +49,11 @@ export function FeatureImportanceChart({
       <CardContent>
         <ResponsiveContainer width="100%" height={400}>
           <BarChart data={sorted} layout="vertical" margin={{ left: 80 }}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" horizontal={false} />
+            <CartesianGrid
+              strokeDasharray="3 3"
+              className="stroke-muted"
+              horizontal={false}
+            />
             <XAxis
               type="number"
               className="text-xs"
@@ -62,12 +72,17 @@ export function FeatureImportanceChart({
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: 'hsl(var(--popover))',
-                border: '1px solid hsl(var(--border))',
-                borderRadius: '8px',
-                fontSize: '12px',
+                backgroundColor: "hsl(var(--popover))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: "8px",
+                fontSize: "12px",
               }}
-              formatter={(value: number) => [value.toFixed(4), 'Importance']}
+              formatter={(value) => {
+                if (typeof value === "number") {
+                  return [value.toFixed(4), "Importance"];
+                }
+                return value;
+              }}
             />
             <Bar
               dataKey="importance"
@@ -79,5 +94,5 @@ export function FeatureImportanceChart({
         </ResponsiveContainer>
       </CardContent>
     </Card>
-  )
+  );
 }

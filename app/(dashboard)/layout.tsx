@@ -1,8 +1,8 @@
-'use client'
+"use client";
 
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { UserButton } from '@clerk/nextjs'
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import {
   Sidebar,
   SidebarContent,
@@ -17,8 +17,8 @@ import {
   SidebarProvider,
   SidebarInset,
   SidebarTrigger,
-} from '@/components/ui/sidebar'
-import { Separator } from '@/components/ui/separator'
+} from "@/components/ui/sidebar";
+import { Separator } from "@/components/ui/separator";
 import {
   Lightning,
   Database,
@@ -27,51 +27,51 @@ import {
   ChartLine,
   ChartBar,
   Robot,
-} from '@phosphor-icons/react'
+} from "@phosphor-icons/react";
 
 const NAV_ITEMS = [
   {
-    label: 'Overview',
-    href: '/dashboard',
+    label: "Overview",
+    href: "/dashboard",
     icon: Lightning,
   },
   {
-    label: 'Data',
-    href: '/dashboard/data',
+    label: "Data",
+    href: "/dashboard/data",
     icon: Database,
   },
   {
-    label: 'Pre-process',
-    href: '/dashboard/preprocess',
+    label: "Pre-process",
+    href: "/dashboard/preprocess",
     icon: Funnel,
   },
   {
-    label: 'Train',
-    href: '/dashboard/train',
+    label: "Train",
+    href: "/dashboard/train",
     icon: Brain,
   },
   {
-    label: 'Evaluate',
-    href: '/dashboard/evaluate',
+    label: "Evaluate",
+    href: "/dashboard/evaluate",
     icon: ChartBar,
   },
   {
-    label: 'Forecast',
-    href: '/dashboard/forecast',
+    label: "Forecast",
+    href: "/dashboard/forecast",
     icon: ChartLine,
   },
-]
+];
 
 const LOW_PRIORITY_ITEMS = [
   {
-    label: 'AI Chat',
-    href: '/dashboard/ai',
+    label: "AI Chat",
+    href: "/dashboard/ai",
     icon: Robot,
   },
-]
+];
 
 function AppSidebar() {
-  const pathname = usePathname()
+  const pathname = usePathname();
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -108,7 +108,9 @@ function AppSidebar() {
                     tooltip={item.label}
                   >
                     <Link href={item.href}>
-                      <item.icon weight={pathname === item.href ? 'fill' : 'regular'} />
+                      <item.icon
+                        weight={pathname === item.href ? "fill" : "regular"}
+                      />
                       <span>{item.label}</span>
                     </Link>
                   </SidebarMenuButton>
@@ -130,7 +132,9 @@ function AppSidebar() {
                     tooltip={item.label}
                   >
                     <Link href={item.href}>
-                      <item.icon weight={pathname === item.href ? 'fill' : 'regular'} />
+                      <item.icon
+                        weight={pathname === item.href ? "fill" : "regular"}
+                      />
                       <span>{item.label}</span>
                     </Link>
                   </SidebarMenuButton>
@@ -146,9 +150,8 @@ function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg">
               <UserButton
-                afterSignOutUrl="/"
                 appearance={{
-                  elements: { avatarBox: 'size-8' },
+                  elements: { avatarBox: "size-8" },
                 }}
               />
               <div className="grid flex-1 text-left text-sm leading-tight">
@@ -162,13 +165,13 @@ function AppSidebar() {
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
-  )
+  );
 }
 
 export default function DashboardLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
   return (
     <SidebarProvider>
@@ -184,5 +187,5 @@ export default function DashboardLayout({
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </SidebarInset>
     </SidebarProvider>
-  )
+  );
 }
