@@ -1,13 +1,35 @@
-import type { Metadata } from 'next'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
+import type { Metadata } from "next";
+import PreprocessManager from "@/components/dashboard/PreprocessManager";
+import { mlFetch } from "@/lib/api-client";
+import type { Dataset, WeatherDataset } from "@/types/dataset";
 
 export const metadata: Metadata = {
-  title: 'Pre-processing',
-  description: 'Run the data preprocessing pipeline — impute, detect outliers, engineer features, and split.',
-}
+  title: "Pre-processing",
+  description:
+    "Run the data preprocessing pipeline — impute, detect outliers, engineer features, and split.",
+};
 
-export default function PreprocessPage() {
+/**
+ * Server component wrapper to hydrate the preprocessing manager with initial data.
+ */
+export default async function PreprocessPage() {
+  let initialDatasets: Dataset[] = [];
+  let initialWeatherDatasets: WeatherDataset[] = [];
+  let initialError: string | null = null;
+
+  try {
+    // Load datasets on the server to reduce client-side requests.
+    const [datasets, weatherDatasets] = await Promise.all([
+      mlFetch<Dataset[]>("/api/v1/datasets"),
+      mlFetch<WeatherDataset[]>("/api/v1/datasets/weather"),
+    ]);
+    initialDatasets = datasets;
+    initialWeatherDatasets = weatherDatasets;
+  } catch (error) {
+    initialError =
+      error instanceof Error ? error.message : "Failed to load datasets";
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -18,67 +40,11 @@ export default function PreprocessPage() {
           normalisation, and train/val/test splitting.
         </p>
       </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Configuration */}
-        <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle>Configuration</CardTitle>
-            <CardDescription>
-              Select a dataset and configure split ratios.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Dataset</label>
-              <div className="flex h-10 items-center rounded-md border px-3 text-sm text-muted-foreground">
-                No datasets available
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Train</label>
-                <div className="flex h-9 items-center rounded-md border px-3 text-sm">
-                  70%
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Val</label>
-                <div className="flex h-9 items-center rounded-md border px-3 text-sm">
-                  15%
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Test</label>
-                <div className="flex h-9 items-center rounded-md border px-3 text-sm">
-                  15%
-                </div>
-              </div>
-            </div>
-            <Button className="w-full" disabled>
-              Run Pre-processing
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* EDA Charts placeholder */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Exploratory Data Analysis</CardTitle>
-            <CardDescription>
-              Visualisations generated after preprocessing — correlation heatmap,
-              seasonal decomposition, and distribution plots.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex h-64 items-center justify-center rounded-lg border border-dashed">
-              <p className="text-sm text-muted-foreground">
-                Run preprocessing to generate EDA charts.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <PreprocessManager
+        initialDatasets={initialDatasets}
+        initialWeatherDatasets={initialWeatherDatasets}
+        initialError={initialError}
+      />
     </div>
-  )
+  );
 }
