@@ -11,6 +11,8 @@ export async function GET() {
     return NextResponse.json(data)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
+
+    console.error('Error fetching datasets:', message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
@@ -29,6 +31,8 @@ export async function POST(request: Request) {
     return NextResponse.json(data, { status: 201 })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
+
+    console.error('Error creating dataset:', message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

@@ -1,6 +1,10 @@
-import { auth } from '@clerk/nextjs/server'
+import { auth } from "@clerk/nextjs/server";
 
-const BASE = process.env.FASTAPI_URL ?? 'http://localhost:8000'
+const BASE = process.env.FASTAPI_URL?.trim() || "http://localhost:8000";
+
+function resolveBackendUrl(path: string) {
+  return new URL(path, BASE).toString();
+}
 
 /**
  * JWT-injecting fetch wrapper for FastAPI backend calls.
@@ -9,23 +13,27 @@ const BASE = process.env.FASTAPI_URL ?? 'http://localhost:8000'
  */
 export async function mlFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<T> {
-  const { getToken } = await auth()
-  const token = await getToken()
+  const { getToken } = await auth();
+  const token = await getToken();
 
-  const res = await fetch(`${BASE}${path}`, {
+  if (!token) {
+    throw new Error("Missing Clerk token for backend request");
+  }
+
+  const res = await fetch(resolveBackendUrl(path), {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
       ...options.headers,
     },
-  })
+  });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail ?? `FastAPI ${res.status}`)
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? `FastAPI ${res.status}`);
   }
-  return res.json() as Promise<T>
+  return res.json() as Promise<T>;
 }
