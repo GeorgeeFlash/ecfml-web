@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { UploadDropzone } from "@/lib/uploadthing";
 import { cn } from "@/lib/utils";
 import type {
   Dataset,
   DatasetPreview,
+  WeatherDataset,
   ValidationStatus,
 } from "@/types/dataset";
 import {
@@ -45,6 +46,14 @@ interface DataManagerProps {
   initialDatasets: Dataset[];
   initialError?: string | null;
 }
+
+type WeatherDatasetRecord = Partial<WeatherDataset> & {
+  dataset_id?: string;
+  file_url?: string;
+  uploadthing_url?: string;
+  uploadthing_key?: string;
+  created_at?: string;
+};
 
 type DatasetRecord = Partial<Dataset> & {
   user_id?: string;
@@ -138,6 +147,18 @@ function normalizePreview(record: DatasetPreviewRecord): DatasetPreview {
   };
 }
 
+function normalizeWeatherDataset(record: WeatherDatasetRecord): WeatherDataset {
+  return {
+    id: record.id ?? "",
+    userId: record.userId ?? "",
+    datasetId: record.datasetId ?? record.dataset_id ?? "",
+    uploadthingUrl:
+      record.uploadthingUrl ?? record.file_url ?? record.uploadthing_url ?? "",
+    uploadthingKey: record.uploadthingKey ?? record.uploadthing_key ?? "",
+    createdAt: record.createdAt ?? record.created_at ?? new Date().toISOString(),
+  };
+}
+
 const STATUS_STYLES: Record<ValidationStatus, string> = {
   VALID: "text-emerald-500 dark:text-emerald-400",
   INVALID: "text-red-500 dark:text-red-400",
@@ -163,6 +184,9 @@ export default function DataManager({
   const [previewFor, setPreviewFor] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [weatherDatasets, setWeatherDatasets] = useState<WeatherDataset[]>([]);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState<string | null>(null);
   const [weatherTargetDatasetId, setWeatherTargetDatasetId] = useState<
     string | null
   >(() => (initialDatasets.length === 1 ? initialDatasets[0].id : null));
@@ -170,6 +194,11 @@ export default function DataManager({
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === previewFor) ?? null,
     [datasets, previewFor],
+  );
+
+  const datasetNameById = useMemo(
+    () => new Map(datasets.map((dataset) => [dataset.id, dataset.name])),
+    [datasets],
   );
 
   /**
@@ -214,6 +243,50 @@ export default function DataManager({
       setLoading(false);
     }
   }, []);
+
+  /**
+   * Load weather datasets from the API.
+   */
+  const loadWeatherDatasets = useCallback(async () => {
+    try {
+      setWeatherLoading(true);
+      setWeatherError(null);
+      const res = await fetch("/api/weather-datasets");
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          extractApiErrorMessage(payload, "Failed to load weather datasets"),
+        );
+      }
+
+      const parsed = unwrapApiData<unknown>(payload);
+      const data = Array.isArray(parsed)
+        ? (parsed as WeatherDatasetRecord[]).map((record) =>
+            normalizeWeatherDataset(record),
+          )
+        : null;
+
+      if (!data) {
+        throw new Error("Weather datasets response was not a list");
+      }
+
+      setWeatherDatasets(data);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load weather datasets";
+      setWeatherError(message);
+    } finally {
+      setWeatherLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const run = async () => {
+      await loadWeatherDatasets();
+    };
+
+    void run();
+  }, [loadWeatherDatasets]);
 
   /**
    * Create a consumption dataset record after UploadThing completes.
@@ -264,8 +337,10 @@ export default function DataManager({
           extractApiErrorMessage(payload, "Failed to create weather dataset"),
         );
       }
+
+      await loadWeatherDatasets();
     },
-    [],
+    [loadWeatherDatasets],
   );
 
   const handleConsumptionComplete = useCallback(
@@ -407,6 +482,43 @@ export default function DataManager({
       }
     },
     [previewFor, loadDatasets],
+  );
+
+  const handleWeatherDelete = useCallback(
+    async (weatherDatasetId: string) => {
+      if (
+        !confirm("Are you sure you want to delete this weather dataset?")
+      ) {
+        return;
+      }
+
+      try {
+        setActionId(weatherDatasetId);
+        const res = await fetch(
+          `/api/weather-datasets/${weatherDatasetId}/delete`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            extractApiErrorMessage(payload, "Failed to delete weather dataset"),
+          );
+        }
+
+        await loadWeatherDatasets();
+        toast.success("Weather dataset deleted");
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Delete weather dataset failed";
+        toast.error(message);
+      } finally {
+        setActionId(null);
+      }
+    },
+    [loadWeatherDatasets],
   );
 
   const handlePreview = useCallback(async (datasetId: string) => {
@@ -617,6 +729,82 @@ export default function DataManager({
                           Delete
                         </Button>
                       </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Weather Datasets</CardTitle>
+          <CardDescription>
+            Weather datasets linked to a consumption dataset.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {weatherLoading ? (
+            <div className="flex h-24 items-center justify-center rounded-lg border border-dashed">
+              <p className="text-sm text-muted-foreground">
+                Loading weather datasets...
+              </p>
+            </div>
+          ) : weatherError ? (
+            <div className="flex h-24 items-center justify-center rounded-lg border border-dashed">
+              <p className="text-sm text-destructive">{weatherError}</p>
+            </div>
+          ) : weatherDatasets.length === 0 ? (
+            <div className="flex h-24 items-center justify-center rounded-lg border border-dashed">
+              <p className="text-sm text-muted-foreground">
+                No weather datasets uploaded yet.
+              </p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Dataset</TableHead>
+                  <TableHead>File</TableHead>
+                  <TableHead>Uploaded</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {weatherDatasets.map((weatherDataset) => (
+                  <TableRow key={weatherDataset.id}>
+                    <TableCell className="max-w-60 truncate">
+                      {datasetNameById.get(weatherDataset.datasetId) ??
+                        weatherDataset.datasetId}
+                    </TableCell>
+                    <TableCell className="max-w-60 truncate">
+                      {weatherDataset.uploadthingUrl ? (
+                        <a
+                          href={weatherDataset.uploadthingUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary underline-offset-4 hover:underline"
+                        >
+                          View file
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {new Date(weatherDataset.createdAt).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="xs"
+                        variant="destructive"
+                        disabled={actionId === weatherDataset.id}
+                        onClick={() => handleWeatherDelete(weatherDataset.id)}
+                      >
+                        Delete
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
