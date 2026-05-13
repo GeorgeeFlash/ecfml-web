@@ -1,18 +1,45 @@
 import { NextResponse } from "next/server";
 import { mlFetch } from "@/lib/api-client";
+import {
+  wrapSuccess,
+  parseStatusFromErrorMessage,
+  getOrGenerateCorrelationId,
+  buildErrorResponse,
+} from "@/lib/api-response";
 
 /**
  * GET /api/weather-datasets — List weather datasets for the current user.
  * Proxies to FastAPI: GET /api/v1/datasets/weather
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const correlationId = getOrGenerateCorrelationId(request);
   try {
     // Forward the request to the FastAPI backend.
-    const data = await mlFetch("/api/v1/datasets/weather");
-    return NextResponse.json(data);
+    const data = await mlFetch("/api/v1/datasets/weather", {
+      headers: { "X-Correlation-ID": correlationId },
+    });
+    const body = wrapSuccess(data);
+    return NextResponse.json(body, {
+      status: 200,
+      headers: { "X-Correlation-ID": correlationId },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = parseStatusFromErrorMessage(message as string | undefined);
+    console.error(
+      `[weather-datasets][GET] correlation_id=${correlationId} error=`,
+      message,
+    );
+    const errBody = buildErrorResponse(
+      "BACKEND_ERROR",
+      message,
+      status,
+      correlationId,
+    );
+    return NextResponse.json(errBody, {
+      status,
+      headers: { "X-Correlation-ID": correlationId },
+    });
   }
 }
 
@@ -21,6 +48,7 @@ export async function GET() {
  * Proxies to FastAPI: POST /api/v1/datasets/weather
  */
 export async function POST(request: Request) {
+  const correlationId = getOrGenerateCorrelationId(request);
   try {
     const body = await request.json();
     const datasetId =
@@ -51,11 +79,30 @@ export async function POST(request: Request) {
 
     const data = await mlFetch("/api/v1/datasets/weather", {
       method: "POST",
+      headers: { "X-Correlation-ID": correlationId },
       body: JSON.stringify(payload),
     });
-    return NextResponse.json(data, { status: 201 });
+    const bodyResp = wrapSuccess(data);
+    return NextResponse.json(bodyResp, {
+      status: 201,
+      headers: { "X-Correlation-ID": correlationId },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = parseStatusFromErrorMessage(message as string | undefined);
+    console.error(
+      `[weather-datasets][POST] correlation_id=${correlationId} error=`,
+      message,
+    );
+    const errBody = buildErrorResponse(
+      "BACKEND_ERROR",
+      message,
+      status,
+      correlationId,
+    );
+    return NextResponse.json(errBody, {
+      status,
+      headers: { "X-Correlation-ID": correlationId },
+    });
   }
 }
