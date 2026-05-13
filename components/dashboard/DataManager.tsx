@@ -4,15 +4,18 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { UploadDropzone } from "@/lib/uploadthing";
 import { cn } from "@/lib/utils";
+import type {
+  Dataset,
+  DatasetPreview,
+  ValidationStatus,
+} from "@/types/dataset";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
+  CardDescription,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -28,11 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type {
-  Dataset,
-  DatasetPreview,
-  ValidationStatus,
-} from "@/types/dataset";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 interface UploadedFile {
   name: string;
@@ -44,6 +44,98 @@ interface UploadedFile {
 interface DataManagerProps {
   initialDatasets: Dataset[];
   initialError?: string | null;
+}
+
+type DatasetRecord = Partial<Dataset> & {
+  user_id?: string;
+  file_url?: string;
+  uploadthing_url?: string;
+  uploadthing_key?: string;
+  row_count?: number | null;
+  validation_status?: ValidationStatus;
+  validation_report?: Dataset["validationReport"];
+  created_at?: string;
+  deleted_at?: string | null;
+};
+
+type DatasetPreviewRecord = Partial<DatasetPreview> & {
+  row_count?: number;
+};
+
+function extractApiErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") {
+    return fallback;
+  }
+
+  const maybeError = (payload as { error?: unknown }).error;
+  if (typeof maybeError === "string") {
+    return maybeError;
+  }
+
+  if (maybeError && typeof maybeError === "object") {
+    const message = (maybeError as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) {
+      return message;
+    }
+  }
+
+  return fallback;
+}
+
+function unwrapApiData<T>(payload: unknown): T {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "data" in (payload as Record<string, unknown>)
+  ) {
+    return (payload as { data: T }).data;
+  }
+
+  return payload as T;
+}
+
+function normalizeDataset(record: DatasetRecord): Dataset {
+  return {
+    id: record.id ?? "",
+    userId: record.userId ?? record.user_id ?? "",
+    name: record.name ?? "Untitled dataset",
+    uploadthingUrl:
+      record.uploadthingUrl ?? record.uploadthing_url ?? record.file_url ?? "",
+    uploadthingKey: record.uploadthingKey ?? record.uploadthing_key ?? "",
+    rowCount: record.rowCount ?? record.row_count ?? null,
+    validationStatus:
+      record.validationStatus ?? record.validation_status ?? "PENDING",
+    validationReport: (() => {
+      const vrRaw = record.validationReport ?? record.validation_report ?? null;
+      if (!vrRaw) return null;
+      const vr = vrRaw as Partial<import("@/types/dataset").ValidationReport> &
+        Record<string, unknown>;
+      return {
+        hasRequiredColumns:
+          vr.hasRequiredColumns ??
+          (vr.missingColumns ? vr.missingColumns.length === 0 : undefined) ??
+          false,
+        missingColumns:
+          (vr.missingColumns as string[]) ??
+          (vr["missing_columns"] as string[]) ??
+          [],
+        rowCount: (vr.rowCount as number) ?? (vr["row_count"] as number) ?? 0,
+        dateRange: (vr.dateRange as [string, string]) ?? null,
+        warnings: (vr.warnings as string[]) ?? [],
+      };
+    })(),
+    createdAt:
+      record.createdAt ?? record.created_at ?? new Date().toISOString(),
+    deletedAt: record.deletedAt ?? record.deleted_at ?? null,
+  };
+}
+
+function normalizePreview(record: DatasetPreviewRecord): DatasetPreview {
+  return {
+    columns: record.columns ?? [],
+    rows: record.rows ?? [],
+    totalRows: record.totalRows ?? record.row_count ?? 0,
+  };
 }
 
 const STATUS_STYLES: Record<ValidationStatus, string> = {
@@ -60,7 +152,11 @@ export default function DataManager({
   initialDatasets,
   initialError = null,
 }: DataManagerProps) {
-  const [datasets, setDatasets] = useState<Dataset[]>(initialDatasets);
+  const [datasets, setDatasets] = useState<Dataset[]>(() =>
+    initialDatasets.map((dataset) =>
+      normalizeDataset(dataset as DatasetRecord),
+    ),
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
@@ -84,11 +180,24 @@ export default function DataManager({
       setLoading(true);
       setError(null);
       const res = await fetch("/api/datasets");
+      const payload = await res.json().catch(() => null);
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Failed to load datasets");
+        throw new Error(
+          extractApiErrorMessage(payload, "Failed to load datasets"),
+        );
       }
-      const data: Dataset[] = await res.json();
+
+      const parsed = unwrapApiData<unknown>(payload);
+      const data = Array.isArray(parsed)
+        ? (parsed as DatasetRecord[]).map((dataset) =>
+            normalizeDataset(dataset),
+          )
+        : null;
+
+      if (!data) {
+        throw new Error("Datasets response was not a list");
+      }
+
       setDatasets(data);
       setWeatherTargetDatasetId((current) => {
         // Preserve the existing selection if it still exists.
@@ -124,8 +233,10 @@ export default function DataManager({
       }),
     });
     if (!res.ok) {
-      const payload = await res.json().catch(() => ({}));
-      throw new Error(payload.error ?? "Failed to create dataset record");
+      const payload = await res.json().catch(() => null);
+      throw new Error(
+        extractApiErrorMessage(payload, "Failed to create dataset record"),
+      );
     }
   }, []);
 
@@ -148,8 +259,10 @@ export default function DataManager({
         }),
       });
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Failed to create weather dataset");
+        const payload = await res.json().catch(() => null);
+        throw new Error(
+          extractApiErrorMessage(payload, "Failed to create weather dataset"),
+        );
       }
     },
     [],
@@ -198,14 +311,57 @@ export default function DataManager({
   const handleValidate = useCallback(
     async (datasetId: string) => {
       try {
+        const dataset = datasets.find((entry) => entry.id === datasetId);
+        if (!dataset?.uploadthingUrl) {
+          throw new Error("Dataset file URL is missing");
+        }
+
         setActionId(datasetId);
         const res = await fetch(`/api/datasets/${datasetId}/validate`, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileUrl: dataset.uploadthingUrl }),
         });
         if (!res.ok) {
-          const payload = await res.json().catch(() => ({}));
-          throw new Error(payload.error ?? "Validation failed");
+          const payload = await res.json().catch(() => null);
+          throw new Error(extractApiErrorMessage(payload, "Validation failed"));
         }
+
+        // Parse validation response and update dataset state immediately
+        const payload = await res.json().catch(() => null);
+        const validateResponse = unwrapApiData<{
+          status?: ValidationStatus;
+          missing_columns?: string[];
+          columns?: string[];
+          row_count?: number;
+          warnings?: string[];
+        } | null>(payload);
+
+        if (validateResponse) {
+          setDatasets((current) =>
+            current.map((ds) => {
+              if (ds.id !== datasetId) return ds;
+
+              const validationStatus = validateResponse.status ?? "PENDING";
+              const missingColumns = validateResponse.missing_columns ?? [];
+              const rowCount = validateResponse.row_count ?? ds.rowCount;
+
+              return {
+                ...ds,
+                validationStatus,
+                rowCount,
+                validationReport: {
+                  hasRequiredColumns: missingColumns.length === 0,
+                  missingColumns,
+                  rowCount: rowCount ?? 0,
+                  dateRange: null,
+                  warnings: validateResponse.warnings ?? [],
+                },
+              };
+            }),
+          );
+        }
+
         toast.success("Validation started");
         await loadDatasets();
       } catch (err) {
@@ -216,7 +372,41 @@ export default function DataManager({
         setActionId(null);
       }
     },
-    [loadDatasets],
+    [datasets, loadDatasets],
+  );
+
+  const handleDelete = useCallback(
+    async (datasetId: string) => {
+      if (!confirm("Are you sure you want to delete this dataset?")) return;
+      try {
+        setActionId(datasetId);
+        const res = await fetch(`/api/datasets/${datasetId}/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            extractApiErrorMessage(payload, "Failed to delete dataset"),
+          );
+        }
+
+        // Reload datasets from the server to keep state authoritative
+        await loadDatasets();
+        // Clear preview/selection if it referenced the deleted dataset
+        setPreview((p) => (previewFor === datasetId ? null : p));
+        setPreviewFor((pf) => (pf === datasetId ? null : pf));
+        setWeatherTargetDatasetId((w) => (w === datasetId ? null : w));
+
+        toast.success("Dataset deleted");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Delete failed";
+        toast.error(message);
+      } finally {
+        setActionId(null);
+      }
+    },
+    [previewFor, loadDatasets],
   );
 
   const handlePreview = useCallback(async (datasetId: string) => {
@@ -224,12 +414,13 @@ export default function DataManager({
       setPreviewLoading(true);
       setPreviewFor(datasetId);
       const res = await fetch(`/api/datasets/${datasetId}/preview?rows=10`);
+      const payload = await res.json().catch(() => null);
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.error ?? "Preview failed");
+        throw new Error(extractApiErrorMessage(payload, "Preview failed"));
       }
-      const data: DatasetPreview = await res.json();
-      setPreview(data);
+
+      const data = unwrapApiData<DatasetPreviewRecord>(payload);
+      setPreview(normalizePreview(data));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Preview failed";
       toast.error(message);
@@ -285,7 +476,9 @@ export default function DataManager({
                 </p>
                 <Select
                   value={resolvedWeatherTargetId ?? undefined}
-                  onValueChange={(value) => setWeatherTargetDatasetId(value)}
+                  onValueChange={(value: string) =>
+                    setWeatherTargetDatasetId(value)
+                  }
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select a consumption dataset" />
@@ -415,6 +608,14 @@ export default function DataManager({
                             </a>
                           </Button>
                         ) : null}
+                        <Button
+                          size="xs"
+                          variant="destructive"
+                          disabled={actionId === dataset.id}
+                          onClick={() => handleDelete(dataset.id)}
+                        >
+                          Delete
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -479,9 +680,9 @@ export default function DataManager({
                         Missing Columns
                       </p>
                       <p className="font-medium">
-                        {selectedDataset.validationReport.missingColumns
-                          .length > 0
-                          ? selectedDataset.validationReport.missingColumns.join(
+                        {(selectedDataset.validationReport.missingColumns
+                          ?.length ?? 0) > 0
+                          ? selectedDataset.validationReport.missingColumns!.join(
                               ", ",
                             )
                           : "None"}
@@ -492,8 +693,11 @@ export default function DataManager({
                         Warnings
                       </p>
                       <p className="font-medium">
-                        {selectedDataset.validationReport.warnings.length > 0
-                          ? selectedDataset.validationReport.warnings.join(", ")
+                        {(selectedDataset.validationReport.warnings?.length ??
+                          0) > 0
+                          ? selectedDataset.validationReport.warnings!.join(
+                              ", ",
+                            )
                           : "None"}
                       </p>
                     </div>
