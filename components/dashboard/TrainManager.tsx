@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useJobPoller } from "@/hooks/use-job-poller";
+import { extractApiErrorMessage, unwrapApiData } from "@/lib/api-contract";
+import {
+  mapModelTypeToSourceType,
+  normalizeEvaluationResult,
+  normalizeModelRunRecord,
+  normalizePreprocessJobRecord,
+  readEvaluationCache,
+  writeEvaluationCache,
+  type EvaluationApiRecord,
+  type ModelRunApiRecord,
+  type PreprocessJobApiRecord,
+} from "@/lib/evaluation-utils";
 import type {
   JobStatus,
   ModelType,
@@ -48,10 +60,47 @@ interface TrainingHistoryRecord {
   job_id: string;
   status: JobStatus;
   model_type: ModelType;
+  preprocess_job_id?: string;
+  model_file_path?: string | null;
   created_at: string;
   training_time_secs?: number;
   error?: string;
 }
+
+interface ModelRunListRecord {
+  job_id?: string;
+  jobId?: string;
+  id?: string;
+  status?: JobStatus;
+  model_type?: ModelType | string;
+  modelType?: ModelType | string;
+  preprocess_job_id?: string;
+  preprocessJobId?: string;
+  model_file_path?: string | null;
+  modelFilePath?: string | null;
+  created_at?: string;
+  createdAt?: string;
+  training_time_secs?: number | null;
+  trainingTimeSecs?: number | null;
+  error?: string | null;
+}
+
+const normalizeHistoryRecord = (
+  record: ModelRunListRecord,
+): TrainingHistoryRecord => {
+  const normalized = normalizeModelRunRecord(record);
+
+  return {
+    job_id: normalized.job_id,
+    status: normalized.status as JobStatus,
+    model_type: (normalized.model_type ?? "RANDOM_FOREST") as ModelType,
+    preprocess_job_id: normalized.preprocess_job_id,
+    model_file_path: normalized.model_file_path,
+    created_at: normalized.created_at,
+    training_time_secs: normalized.training_time_secs ?? undefined,
+    error: normalized.error ?? undefined,
+  };
+};
 
 const STATUS_STYLES: Record<JobStatus, string> = {
   PENDING: "text-muted-foreground",
@@ -91,6 +140,7 @@ export default function TrainManager() {
   const [currentTrainingJobId, setCurrentTrainingJobId] = useState<
     string | null
   >(null);
+  const evaluatedJobIdsRef = useRef<Set<string>>(new Set());
 
   // Hyperparameters
   const [rfParams, setRfParams] = useState<RFHyperparams>(DEFAULT_RF_PARAMS);
@@ -103,13 +153,16 @@ export default function TrainManager() {
       try {
         setLoading(true);
         const res = await fetch("/api/preprocess/jobs");
+        const payload = await res.json().catch(() => null);
         if (!res.ok) {
-          const payload = await res.json().catch(() => ({}));
           throw new Error(
-            payload.error ?? "Failed to fetch preprocessing jobs",
+            extractApiErrorMessage(
+              payload,
+              "Failed to fetch preprocessing jobs",
+            ),
           );
         }
-        const { data } = await res.json();
+        const data = unwrapApiData<PreprocessJobRecord[]>(payload);
         // Filter to only completed jobs
         const completed = (Array.isArray(data) ? data : []).filter(
           (job: PreprocessJobRecord) => job.status === "COMPLETE",
@@ -133,14 +186,20 @@ export default function TrainManager() {
     const fetchHistory = async () => {
       try {
         const res = await fetch("/api/models/jobs");
+        const payload = await res.json().catch(() => null);
         if (!res.ok) {
-          // If endpoint doesn't exist, silently fail
-          return;
+          throw new Error(
+            extractApiErrorMessage(payload, "Failed to fetch training history"),
+          );
         }
-        const { data } = await res.json();
-        setTrainingHistory(Array.isArray(data) ? data : []);
-      } catch {
-        // Silently fail if training history endpoint doesn't exist
+        const data = unwrapApiData<ModelRunListRecord[]>(payload);
+        setTrainingHistory(
+          Array.isArray(data) ? data.map(normalizeHistoryRecord) : [],
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to load history";
+        toast.error(message);
       }
     };
 
@@ -177,25 +236,32 @@ export default function TrainManager() {
         body: JSON.stringify(payload),
       });
 
+      const body = await res.json().catch(() => null);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? "Failed to start training");
+        throw new Error(
+          extractApiErrorMessage(body, "Failed to start training"),
+        );
       }
 
-      const data = await res.json();
-      // response is wrapped as { data: ... }
-      const returned = data?.data ?? data ?? {};
+      const returned = (unwrapApiData<ModelRunListRecord | null>(body) ??
+        {}) as ModelRunListRecord;
       const returnedJobId = returned.job_id ?? returned.jobId ?? payload.job_id;
       setCurrentTrainingJobId(returnedJobId ?? null);
       toast.success("Training started");
-      // Optionally update history
       setTrainingHistory((prev) => [
-        {
-          job_id: payload.job_id,
-          status: "PENDING",
+        normalizeHistoryRecord({
+          job_id: returnedJobId ?? payload.job_id,
+          status: (returned.status ?? "PENDING") as JobStatus,
           model_type: selectedModel,
-          created_at: new Date().toISOString(),
-        },
+          preprocess_job_id: selectedJob.job_id,
+          model_file_path:
+            (returned as ModelRunListRecord).model_file_path ??
+            (returned as ModelRunListRecord).modelFilePath ??
+            null,
+          created_at: returned.created_at ?? new Date().toISOString(),
+          training_time_secs: returned.training_time_secs ?? null,
+          error: returned.error ?? null,
+        }),
         ...prev,
       ]);
     } catch (err) {
@@ -214,33 +280,193 @@ export default function TrainManager() {
     if (!currentTrainingJobId || !trainingState) return;
     // Update history when status changes
     if (trainingState.status) {
-      setTrainingHistory((prev) => {
-        const exists = prev.find((p) => p.job_id === currentTrainingJobId);
-        const entry = {
-          job_id: currentTrainingJobId,
-          status: trainingState.status as JobStatus,
-          model_type: selectedModel,
-          created_at: new Date().toISOString(),
-          training_time_secs: undefined,
-          error: trainingState.error,
-        } as TrainingHistoryRecord;
-        if (exists) {
-          return prev.map((p) =>
-            p.job_id === currentTrainingJobId ? { ...p, ...entry } : p,
-          );
-        }
-        return [entry, ...prev];
+      queueMicrotask(() => {
+        setTrainingHistory((prev) => {
+          const exists = prev.find((p) => p.job_id === currentTrainingJobId);
+          const entry = {
+            job_id: currentTrainingJobId,
+            status: trainingState.status as JobStatus,
+            model_type: selectedModel,
+            created_at: new Date().toISOString(),
+            training_time_secs: undefined,
+            error: trainingState.error,
+          } as TrainingHistoryRecord;
+          if (exists) {
+            return prev.map((p) =>
+              p.job_id === currentTrainingJobId ? { ...p, ...entry } : p,
+            );
+          }
+          return [entry, ...prev];
+        });
       });
     }
 
     if (trainingState.status === "COMPLETE") {
       toast.success("Training completed");
-      setCurrentTrainingJobId(null);
+      const completedJobId = currentTrainingJobId;
+      const completedRecord = trainingHistory.find(
+        (record) => record.job_id === completedJobId,
+      );
+      const completedSourceType = mapModelTypeToSourceType(
+        completedRecord?.model_type ?? selectedModel,
+      );
+      if (!completedJobId || evaluatedJobIdsRef.current.has(completedJobId)) {
+        setCurrentTrainingJobId(null);
+        return;
+      }
+
+      evaluatedJobIdsRef.current.add(completedJobId);
+
+      (async () => {
+        try {
+          const embeddedEvaluation =
+            trainingState.evaluation_result ?? trainingState.evaluationResult;
+          const embeddedModelRunId =
+            trainingState.model_run_id ??
+            trainingState.modelRunId ??
+            completedJobId;
+          const embeddedModelFilePath =
+            trainingState.model_file_path ??
+            trainingState.modelFilePath ??
+            null;
+          const embeddedProcessedFilePath =
+            trainingState.processed_file_path ??
+            trainingState.processedFilePath ??
+            null;
+          const historyPreprocessJobId =
+            completedRecord?.preprocess_job_id ?? selectedJob?.job_id ?? null;
+          const historyModelFilePath =
+            completedRecord?.model_file_path ?? embeddedModelFilePath ?? null;
+
+          if (embeddedModelRunId) {
+            const cachedEvaluation = readEvaluationCache(embeddedModelRunId);
+            if (cachedEvaluation) {
+              window.dispatchEvent(
+                new CustomEvent("ecfml:evaluation-complete", {
+                  detail: { modelRunId: embeddedModelRunId },
+                }),
+              );
+              return;
+            }
+          }
+
+          if (embeddedEvaluation && embeddedModelRunId) {
+            const normalized = normalizeEvaluationResult(
+              embeddedEvaluation as EvaluationApiRecord,
+              completedSourceType,
+            );
+            writeEvaluationCache(embeddedModelRunId, normalized);
+            window.dispatchEvent(
+              new CustomEvent("ecfml:evaluation-complete", {
+                detail: { modelRunId: embeddedModelRunId },
+              }),
+            );
+            return;
+          }
+
+          let modelRunId = embeddedModelRunId;
+          let modelFilePath = historyModelFilePath;
+          let processedFilePath = embeddedProcessedFilePath;
+
+          if (!modelRunId || !modelFilePath || !processedFilePath) {
+            const runsResponse = await fetch("/api/models/jobs");
+            const runsPayload = await runsResponse.json().catch(() => null);
+            if (!runsResponse.ok) {
+              throw new Error(
+                extractApiErrorMessage(
+                  runsPayload,
+                  "Failed to fetch model runs",
+                ),
+              );
+            }
+
+            const runs = (
+              unwrapApiData<ModelRunApiRecord[]>(runsPayload) ?? []
+            ).map(normalizeModelRunRecord);
+            const run = runs.find((record) => record.job_id === completedJobId);
+            if (!run) {
+              throw new Error("Completed model run not found");
+            }
+
+            modelRunId = run.job_id;
+            modelFilePath = run.model_file_path ?? modelFilePath;
+            const preprocessJobId =
+              run.preprocess_job_id ??
+              historyPreprocessJobId ??
+              selectedJob?.job_id ??
+              null;
+
+            const preprocessResponse = await fetch("/api/preprocess/jobs");
+            const preprocessPayload = await preprocessResponse
+              .json()
+              .catch(() => null);
+            if (!preprocessResponse.ok) {
+              throw new Error(
+                extractApiErrorMessage(
+                  preprocessPayload,
+                  "Failed to fetch preprocessing jobs",
+                ),
+              );
+            }
+
+            const preprocessJobs = (
+              unwrapApiData<PreprocessJobApiRecord[]>(preprocessPayload) ?? []
+            ).map(normalizePreprocessJobRecord);
+            processedFilePath =
+              preprocessJobs.find((job) => job.job_id === preprocessJobId)
+                ?.processed_file_path ?? processedFilePath;
+          }
+
+          if (!modelRunId || !modelFilePath || !processedFilePath) {
+            throw new Error(
+              "Missing evaluation inputs for completed model run",
+            );
+          }
+
+          const evalRes = await fetch(
+            `/api/models/${encodeURIComponent(modelRunId)}/evaluate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model_run_id: modelRunId,
+                model_file_path: modelFilePath,
+                processed_file_path: processedFilePath,
+              }),
+            },
+          );
+          const evalBody = await evalRes.json().catch(() => null);
+          if (!evalRes.ok) {
+            throw new Error(
+              extractApiErrorMessage(evalBody, "Evaluation failed"),
+            );
+          }
+
+          const evaluation = normalizeEvaluationResult(
+            unwrapApiData<EvaluationApiRecord>(evalBody),
+            completedSourceType,
+          );
+          writeEvaluationCache(modelRunId, evaluation);
+          window.dispatchEvent(
+            new CustomEvent("ecfml:evaluation-complete", {
+              detail: { modelRunId },
+            }),
+          );
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : "Failed to run evaluation";
+          toast.error(message);
+        } finally {
+          setCurrentTrainingJobId(null);
+        }
+      })();
     } else if (trainingState.status === "FAILED") {
       toast.error(trainingState.error ?? "Training failed");
-      setCurrentTrainingJobId(null);
+      queueMicrotask(() => {
+        setCurrentTrainingJobId(null);
+      });
     }
-  }, [currentTrainingJobId, trainingState, selectedModel]);
+  }, [currentTrainingJobId, selectedModel, trainingHistory, trainingState]);
 
   const updateRFParam = (key: keyof RFHyperparams, value: unknown) => {
     setRfParams((prev) => ({ ...prev, [key]: value }));
@@ -273,9 +499,7 @@ export default function TrainManager() {
               </div>
             </div>
             <div className="mt-3">
-              <Progress
-                value={Math.round((trainingState?.progress ?? 0) * 100)}
-              />
+              <Progress value={trainingState?.progress ?? 0} />
             </div>
             {trainingState?.error && (
               <p className="mt-2 text-sm text-red-500">{trainingState.error}</p>
@@ -466,6 +690,11 @@ export default function TrainManager() {
                   <div className="text-xs text-muted-foreground">
                     {h.model_type} — {h.status}
                   </div>
+                  {typeof h.training_time_secs === "number" && (
+                    <div className="text-xs text-muted-foreground">
+                      {h.training_time_secs.toFixed(2)}s
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

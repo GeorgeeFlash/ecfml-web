@@ -1,12 +1,5 @@
 import type { Metadata } from "next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import TrainManager from "@/components/dashboard/TrainManager";
 
 export const metadata: Metadata = {
@@ -41,33 +34,7 @@ export default function TrainPage() {
         </AlertDescription>
       </Alert>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Model configuration */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Model Configuration</CardTitle>
-            <CardDescription>
-              Select a preprocessing job and configure hyperparameters.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <TrainManager />
-          </CardContent>
-        </Card>
-
-        {/* Previous runs */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Training History</CardTitle>
-            <CardDescription>
-              View previous model training runs and their status.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm text-muted-foreground">No history yet</div>
-          </CardContent>
-        </Card>
-      </div>
+      <TrainManager />
     </div>
   );
 }
