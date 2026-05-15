@@ -53,10 +53,11 @@ export async function POST(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     const status = parseStatusFromErrorMessage(message);
-    console.error(
-      `[models:evaluate][POST] correlation_id=${correlationId} error=`,
+    console.error(`[evaluate:route] correlation_id=${correlationId} error=`, {
       message,
-    );
+      status,
+      errorFull: error,
+    });
     const errBody = buildErrorResponse(
       "BACKEND_ERROR",
       message,

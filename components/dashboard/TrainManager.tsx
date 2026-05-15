@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useJobPoller } from "@/hooks/use-job-poller";
 import { extractApiErrorMessage, unwrapApiData } from "@/lib/api-contract";
 import {
@@ -39,6 +40,7 @@ import type {
   ModelType,
   RFHyperparams,
   SVRHyperparams,
+  EvaluationResult,
 } from "@/types/model";
 
 interface PreprocessJobRecord {
@@ -140,6 +142,11 @@ export default function TrainManager() {
   const [currentTrainingJobId, setCurrentTrainingJobId] = useState<
     string | null
   >(null);
+  const [lastEvaluationResult, setLastEvaluationResult] =
+    useState<EvaluationResult | null>(null);
+  const [lastEvaluationJobId, setLastEvaluationJobId] = useState<string | null>(
+    null,
+  );
   const evaluatedJobIdsRef = useRef<Set<string>>(new Set());
 
   // Hyperparameters
@@ -219,6 +226,8 @@ export default function TrainManager() {
 
     try {
       setIsTraining(true);
+      setLastEvaluationResult(null);
+      setLastEvaluationJobId(null);
       const hyperparams =
         selectedModel === "RANDOM_FOREST" ? rfParams : svrParams;
 
@@ -337,10 +346,11 @@ export default function TrainManager() {
             completedRecord?.preprocess_job_id ?? selectedJob?.job_id ?? null;
           const historyModelFilePath =
             completedRecord?.model_file_path ?? embeddedModelFilePath ?? null;
-
           if (embeddedModelRunId) {
             const cachedEvaluation = readEvaluationCache(embeddedModelRunId);
             if (cachedEvaluation) {
+              setLastEvaluationResult(cachedEvaluation);
+              setLastEvaluationJobId(embeddedModelRunId);
               window.dispatchEvent(
                 new CustomEvent("ecfml:evaluation-complete", {
                   detail: { modelRunId: embeddedModelRunId },
@@ -356,6 +366,8 @@ export default function TrainManager() {
               completedSourceType,
             );
             writeEvaluationCache(embeddedModelRunId, normalized);
+            setLastEvaluationResult(normalized);
+            setLastEvaluationJobId(embeddedModelRunId);
             window.dispatchEvent(
               new CustomEvent("ecfml:evaluation-complete", {
                 detail: { modelRunId: embeddedModelRunId },
@@ -367,7 +379,6 @@ export default function TrainManager() {
           let modelRunId = embeddedModelRunId;
           let modelFilePath = historyModelFilePath;
           let processedFilePath = embeddedProcessedFilePath;
-
           if (!modelRunId || !modelFilePath || !processedFilePath) {
             const runsResponse = await fetch("/api/models/jobs");
             const runsPayload = await runsResponse.json().catch(() => null);
@@ -390,10 +401,11 @@ export default function TrainManager() {
 
             modelRunId = run.job_id;
             modelFilePath = run.model_file_path ?? modelFilePath;
+            // Use || to catch empty strings from backend (not just null/undefined)
             const preprocessJobId =
-              run.preprocess_job_id ??
-              historyPreprocessJobId ??
-              selectedJob?.job_id ??
+              run.preprocess_job_id ||
+              historyPreprocessJobId ||
+              selectedJob?.job_id ||
               null;
 
             const preprocessResponse = await fetch("/api/preprocess/jobs");
@@ -435,10 +447,16 @@ export default function TrainManager() {
               }),
             },
           );
+
           const evalBody = await evalRes.json().catch(() => null);
+
           if (!evalRes.ok) {
+            const errPayload =
+              typeof evalBody === "string"
+                ? { error: { message: evalBody } }
+                : evalBody;
             throw new Error(
-              extractApiErrorMessage(evalBody, "Evaluation failed"),
+              extractApiErrorMessage(errPayload, "Evaluation failed"),
             );
           }
 
@@ -447,6 +465,8 @@ export default function TrainManager() {
             completedSourceType,
           );
           writeEvaluationCache(modelRunId, evaluation);
+          setLastEvaluationResult(evaluation);
+          setLastEvaluationJobId(modelRunId);
           window.dispatchEvent(
             new CustomEvent("ecfml:evaluation-complete", {
               detail: { modelRunId },
@@ -466,7 +486,13 @@ export default function TrainManager() {
         setCurrentTrainingJobId(null);
       });
     }
-  }, [currentTrainingJobId, selectedModel, trainingHistory, trainingState]);
+  }, [
+    currentTrainingJobId,
+    selectedJob?.job_id,
+    selectedModel,
+    trainingHistory,
+    trainingState,
+  ]);
 
   const updateRFParam = (key: keyof RFHyperparams, value: unknown) => {
     setRfParams((prev) => ({ ...prev, [key]: value }));
@@ -683,21 +709,71 @@ export default function TrainManager() {
               No training runs yet
             </div>
           ) : (
-            <div className="space-y-2">
-              {trainingHistory.slice(0, 5).map((h) => (
-                <div key={h.job_id} className="rounded-lg border p-2">
-                  <div className="text-sm">{h.job_id}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {h.model_type} — {h.status}
-                  </div>
-                  {typeof h.training_time_secs === "number" && (
+            <ScrollArea className="h-112 pr-3">
+              <div className="space-y-2">
+                {trainingHistory.map((h) => (
+                  <div
+                    key={h.job_id}
+                    className={`rounded-lg border p-2 ${
+                      lastEvaluationJobId === h.job_id
+                        ? "border-emerald-500/40 bg-emerald-500/5"
+                        : ""
+                    }`}
+                  >
+                    <div className="text-sm">{h.job_id}</div>
                     <div className="text-xs text-muted-foreground">
-                      {h.training_time_secs.toFixed(2)}s
+                      {h.created_at ? new Date(h.created_at).toLocaleString() : ""}
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{h.model_type}</span>
+                      <span>— {h.status}</span>
+                      {lastEvaluationJobId === h.job_id && (
+                        <Badge
+                          variant="outline"
+                          className="border-emerald-500/30 text-emerald-600"
+                        >
+                          Evaluation complete
+                        </Badge>
+                      )}
+                    </div>
+                    {typeof h.training_time_secs === "number" && (
+                      <div className="text-xs text-muted-foreground">
+                        {h.training_time_secs.toFixed(2)}s
+                      </div>
+                    )}
+                    {lastEvaluationJobId === h.job_id &&
+                      lastEvaluationResult && (
+                        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                          <div>
+                            <span className="text-muted-foreground">RMSE</span>
+                            <div className="font-medium">
+                              {lastEvaluationResult.rmse.toFixed(3)}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">MAE</span>
+                            <div className="font-medium">
+                              {lastEvaluationResult.mae.toFixed(3)}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">MAPE</span>
+                            <div className="font-medium">
+                              {lastEvaluationResult.mape.toFixed(3)}%
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">R²</span>
+                            <div className="font-medium">
+                              {lastEvaluationResult.r2.toFixed(3)}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
           )}
         </CardContent>
       </Card>
